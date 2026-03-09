@@ -1,0 +1,7 @@
+{
+  "name": "Smart Parking System",
+  "description": "A comprehensive parking management platform featuring real-time slot booking, QR code tickets, and an admin dashboard for parking in-chargers.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
