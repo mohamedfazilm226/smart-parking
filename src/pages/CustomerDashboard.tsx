@@ -65,7 +65,7 @@ export default function CustomerDashboard() {
   }, [selectedLocation]);
 
   useEffect(() => {
-    fetchMyBookings();
+   fetchMyBookings();
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}`;
