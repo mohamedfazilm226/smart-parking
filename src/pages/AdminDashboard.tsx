@@ -25,11 +25,31 @@ import {
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
 import { Html5Qrcode } from 'html5-qrcode';
+import { insforge, isInsForgeConfigured } from '../lib/insforge';
 
 const LOCATIONS = ["Trichy LA Cinema", "Trichy Bus Stand", "Trichy Railway Station"];
 
+function mapAdminBooking(b: Record<string, unknown>): Booking {
+  const slots = b.slots as { label?: string; location?: string; tier?: string } | null | undefined;
+  return {
+    id: String(b.id),
+    user_id: String(b.user_id),
+    slot_id: String(b.slot_id),
+    slot_label: slots?.label ?? String(b.slot_label ?? ''),
+    location: slots?.location ?? String(b.location ?? ''),
+    tier: slots?.tier ?? String(b.tier ?? ''),
+    user_email: (b.customer_email as string) || String(b.user_email ?? ''),
+    vehicle_number: String(b.vehicle_number),
+    vehicle_type: String(b.vehicle_type),
+    start_time: String(b.start_time),
+    duration: Number(b.duration),
+    status: b.status as Booking['status'],
+    created_at: String(b.created_at ?? ''),
+  };
+}
+
 export default function AdminDashboard() {
-  const { token } = useAuth();
+  const { user } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,28 +62,15 @@ export default function AdminDashboard() {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    fetchData();
-
-    // WebSocket for real-time updates
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'SLOT_UPDATE') {
-        setSlots(prevSlots => 
-          prevSlots.map(slot => slot.id === data.slot.id ? data.slot : slot)
-        );
-        fetchData();
-      }
-    };
-
+    void fetchData();
+    const id = window.setInterval(() => {
+      void fetchData();
+    }, 8000);
     return () => {
-      ws.close();
-      stopScanner();
+      window.clearInterval(id);
+      void stopScanner();
     };
-  }, []);
+  }, [user?.id]);
 
   const requestPermission = async () => {
     try {
@@ -155,28 +162,22 @@ export default function AdminDashboard() {
   };
 
   const verifyTicket = async (bookingId: string) => {
+    if (!isInsForgeConfigured()) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/verify-ticket', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ bookingId: bookingId.trim().toUpperCase() })
+      const { data, error } = await insforge.database.rpc('verify_booking', {
+        p_booking_id: bookingId.trim().toUpperCase(),
       });
-
-      const data = await res.json();
-      if (res.ok) {
-        setScanResult(data);
-        setScanError(null);
-        fetchData();
-      } else {
-        setScanError(data.error || "Invalid Ticket ID");
+      if (error) {
+        setScanError(error.message || 'Invalid Ticket ID');
         setScanResult(null);
+        return;
       }
+      setScanResult(data as Record<string, unknown>);
+      setScanError(null);
+      await fetchData();
     } catch (err) {
-      setScanError("Connection error. Please try again.");
+      setScanError(err instanceof Error ? err.message : 'Connection error. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -189,15 +190,19 @@ export default function AdminDashboard() {
   const [manualId, setManualId] = useState('');
 
   const fetchData = async () => {
+    if (!isInsForgeConfigured()) return;
     try {
-      const [bookingsRes, slotsRes] = await Promise.all([
-        fetch('/api/admin/bookings', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/slots')
+      const [bRes, sRes] = await Promise.all([
+        insforge.database
+          .from('bookings')
+          .select('*, slots(label, location, tier, status)')
+          .order('created_at', { ascending: false }),
+        insforge.database.from('slots').select('*'),
       ]);
-      const bookingsData = await bookingsRes.json();
-      const slotsData = await slotsRes.json();
-      setBookings(bookingsData);
-      setSlots(slotsData);
+      if (bRes.error) throw bRes.error;
+      if (sRes.error) throw sRes.error;
+      setBookings((bRes.data ?? []).map((row) => mapAdminBooking(row as Record<string, unknown>)));
+      setSlots((sRes.data ?? []) as Slot[]);
     } catch (err) {
       console.error(err);
     } finally {
@@ -205,19 +210,18 @@ export default function AdminDashboard() {
     }
   };
 
-  const updateSlotStatus = async (slotId: number, status: string) => {
+  const updateSlotStatus = async (slotId: string, status: string) => {
+    if (!isInsForgeConfigured()) return;
     try {
-      const res = await fetch(`/api/admin/slots/${slotId}/status`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ status })
+      const { error } = await insforge.database.rpc('update_slot_status', {
+        p_slot_id: slotId,
+        p_status: status,
       });
-      if (res.ok) {
-        fetchData();
+      if (error) {
+        console.error(error);
+        return;
       }
+      await fetchData();
     } catch (err) {
       console.error(err);
     }

@@ -1,11 +1,12 @@
 export interface User {
-  id: number;
+  id: string;
   email: string;
+  /** UI role: `admin` = in-charger / incharger dashboard */
   role: 'customer' | 'admin';
 }
 
 export interface Slot {
-  id: number;
+  id: string;
   label: string;
   status: 'available' | 'booked' | 'occupied';
   location: string;
@@ -14,8 +15,8 @@ export interface Slot {
 
 export interface Booking {
   id: string;
-  user_id: number;
-  slot_id: number;
+  user_id: string;
+  slot_id: string;
   slot_label: string;
   location: string;
   tier: string;

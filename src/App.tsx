@@ -8,12 +8,22 @@ import AdminDashboard from './pages/AdminDashboard';
 
 import LandingPage from './pages/LandingPage';
 
-function ProtectedRoute({ children, role }: { children: React.ReactNode, role?: 'customer' | 'admin' }) {
-  const { isAuthenticated, user } = useAuth();
-  
-  if (!isAuthenticated) return <Navigate to="/auth" />;
-  if (role && user?.role !== role) return <Navigate to={user?.role === 'admin' ? '/admin' : '/dashboard'} />;
-  
+function ProtectedRoute({ children, role }: { children: React.ReactNode; role?: 'customer' | 'admin' }) {
+  const { isAuthenticated, user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f8f9fa] text-zinc-500 text-sm">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return <Navigate to="/auth" replace />;
+  if (role && user?.role !== role) {
+    return <Navigate to={user?.role === 'admin' ? '/admin' : '/dashboard'} replace />;
+  }
+
   return <>{children}</>;
 }
 

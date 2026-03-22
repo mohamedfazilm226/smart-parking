@@ -6,6 +6,7 @@ import { Car, Clock, Calendar, CheckCircle2, QrCode, X, CreditCard, Loader2, Map
 import { QRCodeSVG } from 'qrcode.react';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
+import { insforge, isInsForgeConfigured } from '../lib/insforge';
 
 const LOCATIONS = ["Trichy LA Cinema", "Trichy Bus Stand", "Trichy Railway Station"];
 
@@ -39,8 +40,26 @@ const TIER_CONFIG = {
   }
 };
 
+function mapBookingRow(b: Record<string, unknown>): Booking {
+  const slots = b.slots as { label?: string; location?: string; tier?: string } | null | undefined;
+  return {
+    id: String(b.id),
+    user_id: String(b.user_id),
+    slot_id: String(b.slot_id),
+    slot_label: slots?.label ?? String(b.slot_label ?? ''),
+    location: slots?.location ?? String(b.location ?? ''),
+    tier: slots?.tier ?? String(b.tier ?? ''),
+    vehicle_number: String(b.vehicle_number),
+    vehicle_type: String(b.vehicle_type),
+    start_time: String(b.start_time),
+    duration: Number(b.duration),
+    status: b.status as Booking['status'],
+    created_at: String(b.created_at ?? ''),
+  };
+}
+
 export default function CustomerDashboard() {
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   const [view, setView] = useState<'locations' | 'slots' | 'bookings'>('locations');
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [selectedTier, setSelectedTier] = useState<string | null>(null);
@@ -60,35 +79,34 @@ export default function CustomerDashboard() {
 
   useEffect(() => {
     if (selectedLocation) {
-      fetchSlots();
+      void fetchSlots();
     }
   }, [selectedLocation]);
 
   useEffect(() => {
-   fetchMyBookings();
+    void fetchMyBookings();
+  }, [user?.id]);
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'SLOT_UPDATE') {
-        setSlots(prevSlots => 
-          prevSlots.map(slot => slot.id === data.slot.id ? data.slot : slot)
-        );
-      }
-    };
-
-    return () => ws.close();
-  }, []);
+  useEffect(() => {
+    if (!selectedLocation || view !== 'slots') return;
+    const t = window.setInterval(() => {
+      void fetchSlots();
+    }, 5000);
+    return () => window.clearInterval(t);
+  }, [selectedLocation, view]);
 
   const fetchSlots = async () => {
+    if (!isInsForgeConfigured() || !selectedLocation) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/slots?location=${encodeURIComponent(selectedLocation!)}`);
-      const data = await res.json();
-      setSlots(data);
+      const { data, error } = await insforge.database
+        .from('slots')
+        .select('*')
+        .eq('location', selectedLocation)
+        .order('tier', { ascending: true });
+      if (error) throw error;
+      const rows = (data ?? []) as Slot[];
+      setSlots(rows);
     } catch (err) {
       console.error(err);
     } finally {
@@ -97,39 +115,49 @@ export default function CustomerDashboard() {
   };
 
   const fetchMyBookings = async () => {
-    const res = await fetch('/api/bookings/my', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const data = await res.json();
-    setBookings(data);
+    if (!isInsForgeConfigured() || !user?.id) return;
+    const { data, error } = await insforge.database
+      .from('bookings')
+      .select('*, slots(label, location, tier, status)')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error(error);
+      return;
+    }
+    setBookings((data ?? []).map((row) => mapBookingRow(row as Record<string, unknown>)));
   };
 
   const handleBooking = async () => {
+    if (!isInsForgeConfigured() || !selectedSlot?.id) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/bookings', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          slotId: selectedSlot?.id,
-          ...formData
-        })
+      const startIso = new Date(formData.startTime).toISOString();
+      const { data, error } = await insforge.database.rpc('create_booking', {
+        p_slot_id: selectedSlot.id,
+        p_vehicle_number: formData.vehicleNumber,
+        p_vehicle_type: formData.vehicleType,
+        p_start_time: startIso,
+        p_duration: formData.duration,
       });
-      const data = await res.json();
-      if (res.ok) {
-        setNewBookingId(data.bookingId);
+      if (error) {
+        setError(error.message || 'Booking failed');
+        return;
+      }
+      const payload = data as { booking_id?: string } | null;
+      const bookingId = payload?.booking_id;
+      if (bookingId) {
+        setNewBookingId(bookingId);
         setBookingStep('success');
-        fetchMyBookings();
+        await fetchMyBookings();
+        await fetchSlots();
         setError(null);
       } else {
-        setError(data.error || "Booking failed");
+        setError('Booking failed');
       }
     } catch (err) {
       console.error(err);
-      setError("An unexpected error occurred");
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
       setLoading(false);
     }
